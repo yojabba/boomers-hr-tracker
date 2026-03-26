@@ -253,8 +253,29 @@ app = FastAPI()
 def get_today():
     conn = get_conn()
     init_db(conn)
-    row = conn.execute("SELECT * FROM daily_leaders ORDER BY game_date DESC LIMIT 1").fetchone()
-    return {"data": row}
+
+    # 🔥 THIS LINE FIXES EVERYTHING
+    leader = update_data()
+
+    if not leader:
+        return {"data": None}
+
+    return {"data": [
+        leader.game_date,
+        leader.batter,
+        leader.team,
+        leader.distance,
+        leader.exit_velocity,
+        leader.launch_angle,
+        leader.inning,
+        leader.is_top_inning,
+        leader.pitcher,
+        leader.pitch_type,
+        leader.event_time,
+        int(leader.tied),
+        leader.game_count,
+        leader.updated_at
+    ]}
 
 
 @app.get("/api/history")
