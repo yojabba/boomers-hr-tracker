@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: boomers-longest-hr-web
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app:app --host 0.0.0.0 --port 10000
+    plan: starter
+
+  - type: worker
+    name: boomers-longest-hr-worker
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app.py --worker
+    plan: starter
