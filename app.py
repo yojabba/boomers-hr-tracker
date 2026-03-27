@@ -336,8 +336,30 @@ def get_history():
 
 @app.post("/api/refresh")
 def refresh():
-    leader = update_data()
-    return {"updated": True, "leader": leader.__dict__ if leader else None}
+    result = update_data()
+    leader = result["leader"]
+
+    return {
+        "updated": True,
+        "promo_active": result["promo_active"],
+        "game_count": result["game_count"],
+        "leader": {
+            "game_date": leader.game_date,
+            "batter": leader.batter,
+            "team": leader.team,
+            "distance": leader.distance,
+            "exit_velocity": leader.exit_velocity,
+            "launch_angle": leader.launch_angle,
+            "inning": leader.inning,
+            "is_top_inning": leader.is_top_inning,
+            "pitcher": leader.pitcher,
+            "pitch_type": leader.pitch_type,
+            "event_time": leader.event_time,
+            "tied": leader.tied,
+            "game_count": leader.game_count,
+            "updated_at": leader.updated_at
+        } if leader else None
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -634,30 +656,39 @@ def homepage():
                 box.innerHTML = message ? `<div class="error">${message}</div>` : '';
             }
 
-            async function loadToday() {
-                const res = await fetch('/api/today');
-                const json = await res.json();
-                const row = mapRow(json.data);
+           async function loadToday() {
+    const res = await fetch('/api/today');
+    const json = await res.json();
+    const row = mapRow(json.data);
 
-                if (!row) {
-                    document.getElementById('leaderName').textContent = 'No leader yet';
-                    document.getElementById('leaderMeta').textContent = 'No stored data available';
-                    return null;
-                }
+    document.getElementById('gamesOnSlate').textContent = fmt(json.game_count);
+    document.getElementById('promoStatus').textContent = json.promo_active ? 'Active' : 'Inactive';
+    document.getElementById('promoBadge').textContent = json.promo_active ? 'Promo Active (5+ games)' : 'Promo Inactive';
 
-                document.getElementById('leaderName').textContent = row.batter || 'Unknown';
-                document.getElementById('leaderMeta').textContent = `${row.team || '--'} • ${row.game_date || '--'}`;
-                document.getElementById('leaderDistance').innerHTML = `${fmt(row.distance)}<span>ft</span>`;
-                document.getElementById('ev').textContent = fmt(row.exit_velocity, ' mph');
-                document.getElementById('la').textContent = fmt(row.launch_angle, '°');
-                document.getElementById('pitcher').textContent = row.pitcher || '--';
-                document.getElementById('updated').textContent = row.updated_at ? new Date(row.updated_at).toLocaleTimeString() : '--';
-                document.getElementById('gamesOnSlate').textContent = fmt(row.game_count);
-                document.getElementById('promoStatus').textContent = row.game_count >= 5 ? 'Active' : 'Inactive';
-                document.getElementById('tieStatus').textContent = row.tied ? 'Tied' : 'Clear';
-                document.getElementById('promoBadge').textContent = row.game_count >= 5 ? 'Promo Active (5+ games)' : 'Promo Inactive';
-                return row;
-            }
+    if (!row) {
+        document.getElementById('leaderName').textContent = 'No leader yet';
+        document.getElementById('leaderMeta').textContent = json.promo_active
+            ? 'No home runs recorded yet today'
+            : 'Fewer than 5 games on the slate';
+        document.getElementById('leaderDistance').innerHTML = `--<span>ft</span>`;
+        document.getElementById('ev').textContent = '--';
+        document.getElementById('la').textContent = '--';
+        document.getElementById('pitcher').textContent = '--';
+        document.getElementById('updated').textContent = '--';
+        document.getElementById('tieStatus').textContent = '--';
+        return null;
+    }
+
+    document.getElementById('leaderName').textContent = row.batter || 'Unknown';
+    document.getElementById('leaderMeta').textContent = `${row.team || '--'} • ${row.game_date || '--'}`;
+    document.getElementById('leaderDistance').innerHTML = `${fmt(row.distance)}<span>ft</span>`;
+    document.getElementById('ev').textContent = fmt(row.exit_velocity, ' mph');
+    document.getElementById('la').textContent = fmt(row.launch_angle, '°');
+    document.getElementById('pitcher').textContent = row.pitcher || '--';
+    document.getElementById('updated').textContent = row.updated_at ? new Date(row.updated_at).toLocaleTimeString() : '--';
+    document.getElementById('tieStatus').textContent = row.tied ? 'Tied' : 'Clear';
+    return row;
+}
 
             async function loadHistory() {
                 const res = await fetch('/api/history');
