@@ -625,25 +625,9 @@ def homepage():
                 return value === null || value === undefined || value === '' ? '--' : `${value}${suffix}`;
             }
 
-            function mapRow(row) {
-                if (!row) return null;
-                return {
-                    game_date: row[0],
-                    batter: row[1],
-                    team: row[2],
-                    distance: row[3],
-                    exit_velocity: row[4],
-                    launch_angle: row[5],
-                    inning: row[6],
-                    is_top_inning: row[7],
-                    pitcher: row[8],
-                    pitch_type: row[9],
-                    event_time: row[10],
-                    tied: !!row[11],
-                    game_count: row[12],
-                    updated_at: row[13]
-                };
-            }
+           function mapRow(row) {
+    return row || null;
+}
 
             function setError(message) {
                 const box = document.getElementById('errorBox');
