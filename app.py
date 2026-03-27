@@ -145,6 +145,9 @@ def extract_home_runs(feed, game_pk):
     events = []
     plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
 
+    away_team = feed.get("gameData", {}).get("teams", {}).get("away", {})
+    home_team = feed.get("gameData", {}).get("teams", {}).get("home", {})
+
     for play in plays:
         if play.get("result", {}).get("eventType") != "home_run":
             continue
@@ -156,12 +159,15 @@ def extract_home_runs(feed, game_pk):
         matchup = play.get("matchup", {})
         about = play.get("about", {})
 
+        batting_team = away_team if about.get("isTopInning") else home_team
+        team_name = batting_team.get("abbreviation") or batting_team.get("name") or ""
+
         events.append(
             HomeRunEvent(
                 game_date=feed.get("gameData", {}).get("datetime", {}).get("officialDate"),
                 game_pk=game_pk,
                 batter=matchup.get("batter", {}).get("fullName"),
-                team="",
+                team=team_name,
                 distance=int(hit.get("totalDistance")),
                 exit_velocity=hit.get("launchSpeed"),
                 launch_angle=hit.get("launchAngle"),
@@ -209,8 +215,13 @@ def update_data():
 
     today = date.today().isoformat()
     games = fetch_schedule(s, today)
+
     if len(games) < MIN_GAMES_FOR_PROMO:
-        return None
+        return {
+            "promo_active": False,
+            "game_count": len(games),
+            "leader": None
+        }
 
     events = []
     for g in games:
@@ -218,6 +229,7 @@ def update_data():
         events.extend(extract_home_runs(feed, g["gamePk"]))
 
     leader = compute_leader(events, len(games))
+
     if leader:
         conn.execute(
             """
@@ -243,7 +255,11 @@ def update_data():
         )
         conn.commit()
 
-    return leader
+    return {
+        "promo_active": True,
+        "game_count": len(games),
+        "leader": leader
+    }
 
 # ===================== FASTAPI =====================
 app = FastAPI()
@@ -251,39 +267,71 @@ app = FastAPI()
 
 @app.get("/api/today")
 def get_today():
-    conn = get_conn()
-    init_db(conn)
+    result = update_data()
 
-    # 🔥 THIS LINE FIXES EVERYTHING
-    leader = update_data()
-
+    leader = result["leader"]
     if not leader:
-        return {"data": None}
+        return {
+            "data": None,
+            "promo_active": result["promo_active"],
+            "game_count": result["game_count"]
+        }
 
-    return {"data": [
-        leader.game_date,
-        leader.batter,
-        leader.team,
-        leader.distance,
-        leader.exit_velocity,
-        leader.launch_angle,
-        leader.inning,
-        leader.is_top_inning,
-        leader.pitcher,
-        leader.pitch_type,
-        leader.event_time,
-        int(leader.tied),
-        leader.game_count,
-        leader.updated_at
-    ]}
-
+    return {
+        "data": {
+            "game_date": leader.game_date,
+            "batter": leader.batter,
+            "team": leader.team,
+            "distance": leader.distance,
+            "exit_velocity": leader.exit_velocity,
+            "launch_angle": leader.launch_angle,
+            "inning": leader.inning,
+            "is_top_inning": leader.is_top_inning,
+            "pitcher": leader.pitcher,
+            "pitch_type": leader.pitch_type,
+            "event_time": leader.event_time,
+            "tied": leader.tied,
+            "game_count": leader.game_count,
+            "updated_at": leader.updated_at
+        },
+        "promo_active": result["promo_active"],
+        "game_count": result["game_count"]
+    }
 
 @app.get("/api/history")
 def get_history():
     conn = get_conn()
     init_db(conn)
-    rows = conn.execute("SELECT * FROM daily_leaders ORDER BY game_date DESC").fetchall()
-    return {"data": rows}
+    rows = conn.execute(
+        """
+        SELECT game_date, batter, team, distance, exit_velocity, launch_angle,
+               inning, is_top_inning, pitcher, pitch_type, event_time, tied,
+               game_count, updated_at
+        FROM daily_leaders
+        ORDER BY game_date DESC
+        """
+    ).fetchall()
+
+    data = []
+    for row in rows:
+        data.append({
+            "game_date": row[0],
+            "batter": row[1],
+            "team": row[2],
+            "distance": row[3],
+            "exit_velocity": row[4],
+            "launch_angle": row[5],
+            "inning": row[6],
+            "is_top_inning": row[7],
+            "pitcher": row[8],
+            "pitch_type": row[9],
+            "event_time": row[10],
+            "tied": bool(row[11]),
+            "game_count": row[12],
+            "updated_at": row[13],
+        })
+
+    return {"data": data}
 
 
 @app.post("/api/refresh")
