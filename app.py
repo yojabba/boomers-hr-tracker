@@ -34,6 +34,7 @@ from typing import Optional
 import requests
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 # ===================== CONFIG =====================
 SPORT_ID = 1
@@ -276,6 +277,7 @@ def update_data():
 
 # ===================== FASTAPI =====================
 app = FastAPI()
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 @app.get("/api/today")
@@ -415,6 +417,16 @@ def homepage():
                 gap: 20px;
                 margin-bottom: 24px;
             }
+            .hero-left {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+            }
+            .brand-logo {
+                height: 64px;
+                width: auto;
+                display: block;
+            }
             .title {
                 font-size: 34px;
                 font-weight: 800;
@@ -457,6 +469,18 @@ def homepage():
             .card h2 {
                 margin: 0 0 14px;
                 font-size: 18px;
+            }
+            .leader-header {
+                display: flex;
+                align-items: center;
+                gap: 16px;
+                margin-bottom: 12px;
+            }
+            .mascot {
+                height: 84px;
+                width: auto;
+                display: block;
+                flex-shrink: 0;
             }
             .leader-name {
                 font-size: 32px;
@@ -585,15 +609,20 @@ def homepage():
             @media (max-width: 900px) {
                 .grid { grid-template-columns: 1fr; }
                 .hero { flex-direction: column; }
+                .hero-left { flex-direction: column; align-items: flex-start; }
+                .leader-header { flex-direction: column; align-items: flex-start; }
             }
         </style>
     </head>
     <body>
         <div class="wrap">
             <div class="hero">
-                <div>
-                    <h1 class="title">Boomer's Sportsbook Longest Home Run Tracker</h1>
-                    <p class="subtitle">Live tracker for the current longest home run of the day, powered by MLB game feeds. Promo eligibility requires at least five games on the slate.</p>
+                <div class="hero-left">
+                    <img src="/static/logo.png" alt="Boomer's Sportsbook" class="brand-logo" />
+                    <div>
+                        <h1 class="title">Longest Home Run Tracker</h1>
+                        <p class="subtitle">Live tracker for the current longest home run of the day, powered by MLB game feeds. Promo eligibility requires at least five games on the slate.</p>
+                    </div>
                 </div>
                 <div id="promoBadge" class="badge">Checking slate...</div>
             </div>
@@ -603,8 +632,13 @@ def homepage():
             <div class="grid">
                 <div class="card">
                     <h2>Current Daily Leader</h2>
-                    <div id="leaderName" class="leader-name">Loading...</div>
-                    <div id="leaderMeta" class="leader-meta">Please wait</div>
+                    <div class="leader-header">
+                        <img src="/static/dog.png" alt="Boomer's mascot" class="mascot" />
+                        <div>
+                            <div id="leaderName" class="leader-name">Loading...</div>
+                            <div id="leaderMeta" class="leader-meta">Please wait</div>
+                        </div>
+                    </div>
                     <div id="leaderDistance" class="distance">--<span>ft</span></div>
                     <div class="stats">
                         <div class="stat"><div class="stat-label">Exit Velocity</div><div id="ev" class="stat-value">--</div></div>
