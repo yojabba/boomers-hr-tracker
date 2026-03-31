@@ -16,10 +16,10 @@ Env (optional):
 - DATABASE_URL (for Postgres). Defaults to local SQLite file.
 
 Routes:
-- GET /            -> HTML dashboard
-- GET /api/today   -> JSON for today's leader
-- GET /api/history -> JSON for all stored days
-- POST /api/refresh -> Force refresh (optional; protect behind auth in prod)
+- GET /             -> HTML dashboard
+- GET /api/today    -> JSON for today's leader
+- GET /api/history  -> JSON for all stored days
+- POST /api/refresh -> Force refresh for today
 - POST /api/backfill -> Backfill history from Opening Day through today
 """
 
@@ -132,7 +132,7 @@ def session():
     return s
 
 
-def fetch_schedule(s, target_date):
+def fetch_schedule(s, target_date: str):
     params = {"sportId": SPORT_ID, "gameType": GAME_TYPE, "date": target_date}
     r = s.get(SCHEDULE_URL, params=params, timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
@@ -143,13 +143,13 @@ def fetch_schedule(s, target_date):
     return games
 
 
-def fetch_live_feed(s, game_pk):
+def fetch_live_feed(s, game_pk: int):
     r = s.get(LIVE_FEED_URL.format(game_pk=game_pk), timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
 
 
-def extract_home_runs(feed, game_pk):
+def extract_home_runs(feed, game_pk: int):
     events = []
     plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
 
@@ -190,7 +190,7 @@ def extract_home_runs(feed, game_pk):
     return events
 
 
-def compute_leader(events, game_count):
+def compute_leader(events, game_count: int):
     if not events:
         return None
 
@@ -226,6 +226,7 @@ def process_date(target_date: date):
     games = fetch_schedule(s, date_str)
 
     if len(games) < MIN_GAMES_FOR_PROMO:
+        print(f"{date_str}: skipped, only {len(games)} games")
         return {
             "promo_active": False,
             "game_count": len(games),
@@ -275,6 +276,9 @@ def process_date(target_date: date):
             ),
         )
         conn.commit()
+        print(f"{date_str}: saved leader {leader.batter} ({leader.distance} ft)")
+    else:
+        print(f"{date_str}: no HR leader found")
 
     return {
         "promo_active": True,
@@ -302,8 +306,10 @@ def backfill_history():
 def ensure_backfill_once():
     global BACKFILL_RAN
     if not BACKFILL_RAN:
+        print("Starting backfill from Opening Day...")
         backfill_history()
         BACKFILL_RAN = True
+        print("Backfill complete.")
 
 
 def update_data():
@@ -314,6 +320,14 @@ def update_data():
 # ===================== FASTAPI =====================
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.on_event("startup")
+def startup_backfill():
+    try:
+        ensure_backfill_once()
+    except Exception as e:
+        print(f"Startup backfill failed: {e}")
 
 
 @app.get("/api/today")
@@ -344,7 +358,7 @@ def get_today():
             "event_time": leader.event_time,
             "tied": leader.tied,
             "game_count": leader.game_count,
-            "updated_at": leader.updated_at
+            "updated_at": leader.updated_at,
         },
         "promo_active": result["promo_active"],
         "game_count": result["game_count"],
@@ -412,7 +426,7 @@ def refresh():
             "event_time": leader.event_time,
             "tied": leader.tied,
             "game_count": leader.game_count,
-            "updated_at": leader.updated_at
+            "updated_at": leader.updated_at,
         } if leader else None
     }
 
