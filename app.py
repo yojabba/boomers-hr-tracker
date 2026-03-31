@@ -23,18 +23,17 @@ Routes:
 """
 
 import os
-import csv
 import sqlite3
 import time
 import argparse
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Optional
 
 import requests
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 
 # ===================== CONFIG =====================
 SPORT_ID = 1
@@ -50,7 +49,6 @@ LIVE_FEED_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/feed/live"
 # DB: Use Postgres if DATABASE_URL provided, else SQLite
 DB_URL = os.getenv("DATABASE_URL")
 SQLITE_PATH = Path("longest_hr_tracker.sqlite3")
-CSV_PATH = Path("longest_hr_daily_winners.csv")
 
 # ===================== DATA CLASSES =====================
 @dataclass
@@ -225,8 +223,12 @@ def update_data():
 
     events = []
     for g in games:
-        feed = fetch_live_feed(s, g["gamePk"])
-        events.extend(extract_home_runs(feed, g["gamePk"]))
+        try:
+            feed = fetch_live_feed(s, g["gamePk"])
+            events.extend(extract_home_runs(feed, g["gamePk"]))
+        except Exception as e:
+            print("Game failed:", g.get("gamePk"), e)
+            continue
 
     leader = compute_leader(events, len(games))
 
@@ -297,6 +299,7 @@ def get_today():
         "promo_active": result["promo_active"],
         "game_count": result["game_count"]
     }
+
 
 @app.get("/api/history")
 def get_history():
@@ -647,48 +650,48 @@ def homepage():
                 return value === null || value === undefined || value === '' ? '--' : `${value}${suffix}`;
             }
 
-           function mapRow(row) {
-    return row || null;
-}
+            function mapRow(row) {
+                return row || null;
+            }
 
             function setError(message) {
                 const box = document.getElementById('errorBox');
                 box.innerHTML = message ? `<div class="error">${message}</div>` : '';
             }
 
-           async function loadToday() {
-    const res = await fetch('/api/today');
-    const json = await res.json();
-    const row = mapRow(json.data);
+            async function loadToday() {
+                const res = await fetch('/api/today');
+                const json = await res.json();
+                const row = mapRow(json.data);
 
-    document.getElementById('gamesOnSlate').textContent = fmt(json.game_count);
-    document.getElementById('promoStatus').textContent = json.promo_active ? 'Active' : 'Inactive';
-    document.getElementById('promoBadge').textContent = json.promo_active ? 'Promo Active (5+ games)' : 'Promo Inactive';
+                document.getElementById('gamesOnSlate').textContent = fmt(json.game_count);
+                document.getElementById('promoStatus').textContent = json.promo_active ? 'Active' : 'Inactive';
+                document.getElementById('promoBadge').textContent = json.promo_active ? 'Promo Active (5+ games)' : 'Promo Inactive';
 
-    if (!row) {
-        document.getElementById('leaderName').textContent = 'No leader yet';
-        document.getElementById('leaderMeta').textContent = json.promo_active
-            ? 'No home runs recorded yet today'
-            : 'Fewer than 5 games on the slate';
-        document.getElementById('leaderDistance').innerHTML = `--<span>ft</span>`;
-        document.getElementById('ev').textContent = '--';
-        document.getElementById('la').textContent = '--';
-        document.getElementById('pitcher').textContent = '--';
-        document.getElementById('updated').textContent = '--';
-        document.getElementById('tieStatus').textContent = '--';
-        return null;
-    }
+                if (!row) {
+                    document.getElementById('leaderName').textContent = 'No leader yet';
+                    document.getElementById('leaderMeta').textContent = json.promo_active
+                        ? 'No home runs recorded yet today'
+                        : 'Fewer than 5 games on the slate';
+                    document.getElementById('leaderDistance').innerHTML = `--<span>ft</span>`;
+                    document.getElementById('ev').textContent = '--';
+                    document.getElementById('la').textContent = '--';
+                    document.getElementById('pitcher').textContent = '--';
+                    document.getElementById('updated').textContent = '--';
+                    document.getElementById('tieStatus').textContent = '--';
+                    return null;
+                }
 
-    document.getElementById('leaderName').textContent = row.batter || 'Unknown';
-    document.getElementById('leaderMeta').textContent = `${row.team || '--'} • ${row.game_date || '--'}`;
-    document.getElementById('leaderDistance').innerHTML = `${fmt(row.distance)}<span>ft</span>`;
-    document.getElementById('ev').textContent = fmt(row.exit_velocity, ' mph');
-    document.getElementById('la').textContent = fmt(row.launch_angle, '°');
-    document.getElementById('pitcher').textContent = row.pitcher || '--';
-    document.getElementById('updated').textContent = row.updated_at ? new Date(row.updated_at).toLocaleTimeString() : '--';
-    document.getElementById('tieStatus').textContent = row.tied ? 'Tied' : 'Clear';
-    return row;
-}
+                document.getElementById('leaderName').textContent = row.batter || 'Unknown';
+                document.getElementById('leaderMeta').textContent = `${row.team || '--'} • ${row.game_date || '--'}`;
+                document.getElementById('leaderDistance').innerHTML = `${fmt(row.distance)}<span>ft</span>`;
+                document.getElementById('ev').textContent = fmt(row.exit_velocity, ' mph');
+                document.getElementById('la').textContent = fmt(row.launch_angle, '°');
+                document.getElementById('pitcher').textContent = row.pitcher || '--';
+                document.getElementById('updated').textContent = row.updated_at ? new Date(row.updated_at).toLocaleTimeString() : '--';
+                document.getElementById('tieStatus').textContent = row.tied ? 'Tied' : 'Clear';
+                return row;
+            }
 
             async function loadHistory() {
                 const res = await fetch('/api/history');
