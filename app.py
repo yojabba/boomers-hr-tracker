@@ -20,6 +20,7 @@ Routes:
 - GET /api/today   -> JSON for today's leader
 - GET /api/history -> JSON for all stored days
 - POST /api/refresh -> Force refresh (optional; protect behind auth in prod)
+- POST /api/backfill -> Backfill history from Opening Day through today
 """
 
 import os
@@ -27,7 +28,7 @@ import sqlite3
 import time
 import argparse
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -47,9 +48,15 @@ USER_AGENT = "Mozilla/5.0 (BoomersBigFliesTracker/3.0)"
 SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
 LIVE_FEED_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/feed/live"
 
+# Opening Day for backfill
+OPENING_DAY = date(2026, 3, 26)
+
 # DB: Use Postgres if DATABASE_URL provided, else SQLite
 DB_URL = os.getenv("DATABASE_URL")
 SQLITE_PATH = Path("longest_hr_tracker.sqlite3")
+
+# Avoid backfilling on every single request
+BACKFILL_RAN = False
 
 # ===================== DATA CLASSES =====================
 @dataclass
@@ -209,20 +216,21 @@ def compute_leader(events, game_count):
     )
 
 
-# ===================== CORE UPDATE =====================
-def update_data():
+# ===================== CORE PROCESSING =====================
+def process_date(target_date: date):
     conn = get_conn()
     init_db(conn)
     s = session()
 
-    today = date.today().isoformat()
-    games = fetch_schedule(s, today)
+    date_str = target_date.isoformat()
+    games = fetch_schedule(s, date_str)
 
     if len(games) < MIN_GAMES_FOR_PROMO:
         return {
             "promo_active": False,
             "game_count": len(games),
-            "leader": None
+            "leader": None,
+            "date": date_str,
         }
 
     events = []
@@ -235,10 +243,10 @@ def update_data():
             feed = fetch_live_feed(s, game_pk)
             events.extend(extract_home_runs(feed, game_pk))
         except requests.exceptions.HTTPError as e:
-            print(f"Skipping game {game_pk}: {e}")
+            print(f"Skipping game {game_pk} on {date_str}: {e}")
             continue
         except Exception as e:
-            print(f"Unexpected error for game {game_pk}: {e}")
+            print(f"Unexpected error for game {game_pk} on {date_str}: {e}")
             continue
 
     leader = compute_leader(events, len(games))
@@ -271,8 +279,36 @@ def update_data():
     return {
         "promo_active": True,
         "game_count": len(games),
-        "leader": leader
+        "leader": leader,
+        "date": date_str,
     }
+
+
+def backfill_history():
+    today = date.today()
+    current = OPENING_DAY
+    results = []
+
+    while current < today:
+        try:
+            results.append(process_date(current))
+        except Exception as e:
+            print(f"Backfill failed for {current.isoformat()}: {e}")
+        current += timedelta(days=1)
+
+    return results
+
+
+def ensure_backfill_once():
+    global BACKFILL_RAN
+    if not BACKFILL_RAN:
+        backfill_history()
+        BACKFILL_RAN = True
+
+
+def update_data():
+    ensure_backfill_once()
+    return process_date(date.today())
 
 
 # ===================== FASTAPI =====================
@@ -289,7 +325,8 @@ def get_today():
         return {
             "data": None,
             "promo_active": result["promo_active"],
-            "game_count": result["game_count"]
+            "game_count": result["game_count"],
+            "last_checked": datetime.utcnow().isoformat(),
         }
 
     return {
@@ -310,12 +347,14 @@ def get_today():
             "updated_at": leader.updated_at
         },
         "promo_active": result["promo_active"],
-        "game_count": result["game_count"]
+        "game_count": result["game_count"],
+        "last_checked": datetime.utcnow().isoformat(),
     }
 
 
 @app.get("/api/history")
 def get_history():
+    ensure_backfill_once()
     conn = get_conn()
     init_db(conn)
     rows = conn.execute(
@@ -352,7 +391,7 @@ def get_history():
 
 @app.post("/api/refresh")
 def refresh():
-    result = update_data()
+    result = process_date(date.today())
     leader = result["leader"]
 
     return {
@@ -375,6 +414,24 @@ def refresh():
             "game_count": leader.game_count,
             "updated_at": leader.updated_at
         } if leader else None
+    }
+
+
+@app.post("/api/backfill")
+def backfill():
+    results = backfill_history()
+    return {
+        "updated": True,
+        "days_processed": len(results),
+        "results": [
+            {
+                "date": r["date"],
+                "promo_active": r["promo_active"],
+                "game_count": r["game_count"],
+                "has_leader": r["leader"] is not None,
+            }
+            for r in results
+        ],
     }
 
 
@@ -420,12 +477,13 @@ def homepage():
             .hero-left {
                 display: flex;
                 align-items: center;
-                gap: 16px;
+                gap: 20px;
             }
             .brand-logo {
-                height: 64px;
+                height: 80px;
                 width: auto;
                 display: block;
+                filter: drop-shadow(0 6px 14px rgba(0,0,0,0.5));
             }
             .title {
                 font-size: 34px;
@@ -452,6 +510,11 @@ def homepage():
                 font-weight: 700;
                 white-space: nowrap;
             }
+            .refresh-note {
+                color: var(--muted);
+                font-size: 12px;
+                margin-top: 8px;
+            }
             .grid {
                 display: grid;
                 grid-template-columns: 1.3fr 0.7fr;
@@ -477,7 +540,7 @@ def homepage():
                 margin-bottom: 12px;
             }
             .mascot {
-                height: 84px;
+                height: 90px;
                 width: auto;
                 display: block;
                 flex-shrink: 0;
@@ -497,7 +560,7 @@ def homepage():
                 line-height: 1;
                 font-weight: 900;
                 color: var(--accent);
-                margin-bottom: 18px;
+                margin-bottom: 24px;
             }
             .distance span {
                 font-size: 22px;
@@ -622,6 +685,7 @@ def homepage():
                     <div>
                         <h1 class="title">Longest Home Run Tracker</h1>
                         <p class="subtitle">Live tracker for the current longest home run of the day, powered by MLB game feeds. Promo eligibility requires at least five games on the slate.</p>
+                        <div id="lastChecked" class="refresh-note">Checking for updates...</div>
                     </div>
                 </div>
                 <div id="promoBadge" class="badge">Checking slate...</div>
@@ -666,7 +730,7 @@ def homepage():
 
             <div class="table-card">
                 <div class="table-head">
-                    <h2>Daily Winner History</h2>
+                    <h2>Daily Leader History</h2>
                     <span class="muted">Most recent dates first</span>
                 </div>
                 <div class="table-wrap">
@@ -712,11 +776,14 @@ def homepage():
                 document.getElementById('gamesOnSlate').textContent = fmt(json.game_count);
                 document.getElementById('promoStatus').textContent = json.promo_active ? 'Active' : 'Inactive';
                 document.getElementById('promoBadge').textContent = json.promo_active ? 'Promo Active (5+ games)' : 'Promo Inactive';
+                document.getElementById('lastChecked').textContent = json.last_checked
+                    ? `Last checked: ${new Date(json.last_checked).toLocaleTimeString()}`
+                    : 'Checking for updates...';
 
                 if (!row) {
                     document.getElementById('leaderName').textContent = 'No leader yet';
                     document.getElementById('leaderMeta').textContent = json.promo_active
-                        ? 'No home runs recorded yet today'
+                        ? 'Waiting for first home run of the day'
                         : 'Fewer than 5 games on the slate';
                     document.getElementById('leaderDistance').innerHTML = `--<span>ft</span>`;
                     document.getElementById('ev').textContent = '--';
@@ -789,7 +856,7 @@ def run_worker():
     print("Starting worker...")
     while True:
         try:
-            update_data()
+            process_date(date.today())
             print("Updated", datetime.now())
         except Exception as e:
             print("Error:", e)
