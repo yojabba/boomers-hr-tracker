@@ -84,6 +84,7 @@ class DailyLeader:
     game_count: int
     updated_at: str
 
+
 # ===================== DB =====================
 def get_conn():
     if DB_URL and DB_URL.startswith("postgres"):
@@ -114,6 +115,7 @@ def init_db(conn):
         """
     )
     conn.commit()
+
 
 # ===================== MLB DATA =====================
 def session():
@@ -205,6 +207,7 @@ def compute_leader(events, game_count):
         updated_at=datetime.utcnow().isoformat(),
     )
 
+
 # ===================== CORE UPDATE =====================
 def update_data():
     conn = get_conn()
@@ -223,11 +226,18 @@ def update_data():
 
     events = []
     for g in games:
+        game_pk = g.get("gamePk")
+        if not game_pk:
+            continue
+
         try:
-            feed = fetch_live_feed(s, g["gamePk"])
-            events.extend(extract_home_runs(feed, g["gamePk"]))
+            feed = fetch_live_feed(s, game_pk)
+            events.extend(extract_home_runs(feed, game_pk))
+        except requests.exceptions.HTTPError as e:
+            print(f"Skipping game {game_pk}: {e}")
+            continue
         except Exception as e:
-            print("Game failed:", g.get("gamePk"), e)
+            print(f"Unexpected error for game {game_pk}: {e}")
             continue
 
     leader = compute_leader(events, len(games))
@@ -262,6 +272,7 @@ def update_data():
         "game_count": len(games),
         "leader": leader
     }
+
 
 # ===================== FASTAPI =====================
 app = FastAPI()
@@ -737,6 +748,7 @@ def homepage():
     </body>
     </html>
     """
+
 
 # ===================== WORKER =====================
 def run_worker():
