@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import requests
 from fastapi import FastAPI
@@ -51,12 +52,20 @@ LIVE_FEED_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/feed/live"
 # Opening Day for backfill
 OPENING_DAY = date(2026, 3, 26)
 
+# Promo / operator timezone
+PROMO_TZ = ZoneInfo("America/Los_Angeles")
+
 # DB: Use Postgres if DATABASE_URL provided, else SQLite
 DB_URL = os.getenv("DATABASE_URL")
 SQLITE_PATH = Path("longest_hr_tracker.sqlite3")
 
 # Avoid backfilling on every single request
 BACKFILL_RAN = False
+
+
+def promo_today() -> date:
+    return datetime.now(PROMO_TZ).date()
+
 
 # ===================== DATA CLASSES =====================
 @dataclass
@@ -289,7 +298,7 @@ def process_date(target_date: date):
 
 
 def backfill_history():
-    today = date.today()
+    today = promo_today()
     current = OPENING_DAY
     results = []
 
@@ -314,7 +323,7 @@ def ensure_backfill_once():
 
 def update_data():
     ensure_backfill_once()
-    return process_date(date.today())
+    return process_date(promo_today())
 
 
 # ===================== FASTAPI =====================
@@ -341,6 +350,7 @@ def get_today():
             "promo_active": result["promo_active"],
             "game_count": result["game_count"],
             "last_checked": datetime.utcnow().isoformat(),
+            "promo_date": promo_today().isoformat(),
         }
 
     return {
@@ -363,6 +373,7 @@ def get_today():
         "promo_active": result["promo_active"],
         "game_count": result["game_count"],
         "last_checked": datetime.utcnow().isoformat(),
+        "promo_date": promo_today().isoformat(),
     }
 
 
@@ -405,7 +416,7 @@ def get_history():
 
 @app.post("/api/refresh")
 def refresh():
-    result = process_date(date.today())
+    result = process_date(promo_today())
     leader = result["leader"]
 
     return {
@@ -870,7 +881,7 @@ def run_worker():
     print("Starting worker...")
     while True:
         try:
-            process_date(date.today())
+            process_date(promo_today())
             print("Updated", datetime.now())
         except Exception as e:
             print("Error:", e)
