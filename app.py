@@ -185,10 +185,10 @@ def extract_home_runs(feed, game_pk: int, debug: bool = False):
         hit = play.get("hitData", {}) or {}
         distance = hit.get("totalDistance")
 
-        # IMPORTANT: Some HRs might not have distance yet. Log them but still try to capture.
+        # HRs without distance data aren't ready yet - skip but log
         if distance is None:
             if debug:
-                print(f"      [HR found but no distance] {description}")
+                print(f"      ⏳ HR detected but distance not available yet: {description}")
             continue
 
         matchup = play.get("matchup", {}) or {}
