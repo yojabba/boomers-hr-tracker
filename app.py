@@ -1,25 +1,3 @@
-# Boomers Big Flies — FastAPI App (Live-Only MLB Longest HR Tracker)
-
-"""
-Live-only tracker for today's longest home run.
-
-How to use:
-- Web app:
-    uvicorn app:app --host 0.0.0.0 --port 8000
-
-- Optional worker:
-    python app.py --worker
-
-Env (optional):
-- DATABASE_URL (for Postgres). Defaults to local SQLite file.
-
-Routes:
-- GET /             -> HTML dashboard
-- GET /api/today    -> JSON for today's leader
-- GET /api/history  -> JSON for stored days
-- POST /api/refresh -> Force refresh for today
-"""
-
 import os
 import sqlite3
 import time
@@ -147,7 +125,18 @@ def fetch_live_feed(s, game_pk: int):
     return r.json()
 
 
+def is_game_active_or_final(game_state: str) -> bool:
+    """Check if game is in progress or already finished (so plays exist)."""
+    live_states = ["Live", "In Progress"]
+    final_states = ["Final", "Game Over", "Completed Early"]
+    state_lower = (game_state or "").lower()
+    return any(s.lower() in state_lower for s in live_states + final_states)
+
+
 def extract_home_runs(feed, game_pk: int):
+    """
+    Extract home runs from live feed with robust detection.
+    """
     events = []
     plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
 
@@ -160,11 +149,16 @@ def extract_home_runs(feed, game_pk: int):
         event = (result.get("event") or "").lower()
         description = (result.get("description") or "").lower()
 
+        # More robust home run detection
         is_home_run = (
             event_type == "home_run"
             or event == "home run"
             or "homered" in description
             or "home run" in description
+            or "solo shot" in description  # Additional variation
+            or "grand slam" in description
+            or "two-run" in description and "homer" in description
+            or "three-run" in description and "homer" in description
         )
 
         if not is_home_run:
@@ -173,7 +167,9 @@ def extract_home_runs(feed, game_pk: int):
         hit = play.get("hitData", {}) or {}
         distance = hit.get("totalDistance")
 
+        # IMPORTANT: Some HRs might not have distance yet. Log them but still try to capture.
         if distance is None:
+            print(f"  [Game {game_pk}] HR found but no distance yet: {description}")
             continue
 
         matchup = play.get("matchup", {}) or {}
@@ -194,7 +190,7 @@ def extract_home_runs(feed, game_pk: int):
                 inning=about.get("inning"),
                 is_top_inning=about.get("isTopInning"),
                 pitcher=matchup.get("pitcher", {}).get("fullName"),
-                pitch_type=None,
+                pitch_type=play.get("pitchData", {}).get("pitchType") if play.get("pitchData") else None,
                 event_time=about.get("endTime"),
             )
         )
@@ -229,16 +225,34 @@ def compute_leader(events, game_count: int):
 
 
 # ===================== CORE PROCESSING =====================
-def process_date(target_date: date):
+def process_date(target_date: date, debug: bool = False):
     conn = get_conn()
     init_db(conn)
     s = session()
 
     date_str = target_date.isoformat()
+    now_utc = datetime.utcnow().isoformat()
+    now_la = datetime.now(PROMO_TZ).isoformat()
+    
+    if debug:
+        print(f"\n{'='*60}")
+        print(f"TIME DEBUG:")
+        print(f"  UTC now: {now_utc}")
+        print(f"  LA now: {now_la}")
+        print(f"  Target date: {date_str}")
+        print(f"{'='*60}")
+    
     games = fetch_schedule(s, date_str)
 
+    if debug:
+        print(f"\n{'='*60}")
+        print(f"Processing: {date_str}")
+        print(f"Total games fetched: {len(games)}")
+        print(f"{'='*60}")
+
     if len(games) < MIN_GAMES_FOR_PROMO:
-        print(f"{date_str}: skipped, only {len(games)} games")
+        if debug:
+            print(f"⚠️  Promo inactive: only {len(games)} games (need {MIN_GAMES_FOR_PROMO})")
         return {
             "promo_active": False,
             "game_count": len(games),
@@ -247,23 +261,51 @@ def process_date(target_date: date):
         }
 
     events = []
-    for g in games:
+    games_fetched = 0
+
+    for idx, g in enumerate(games, 1):
         game_pk = g.get("gamePk")
+        game_status = g.get("status", {}).get("detailedState", "Unknown")
+        game_teams = f"{g.get('teams', {}).get('away', {}).get('team', {}).get('name')} @ {g.get('teams', {}).get('home', {}).get('team', {}).get('name')}"
+        game_link = g.get("link", "N/A")
+
         if not game_pk:
+            if debug:
+                print(f"  [{idx}/{len(games)}] Skipped - no game_pk")
+            continue
+
+        # Check if game is worth fetching
+        if not is_game_active_or_final(game_status):
+            if debug:
+                print(f"  [{idx}/{len(games)}] Skipped (status: {game_status}) - {game_teams}")
             continue
 
         try:
+            if debug:
+                print(f"  [{idx}/{len(games)}] Fetching... {game_teams} ({game_status})")
+                print(f"    PK: {game_pk}, Link: {game_link}")
+
             feed = fetch_live_feed(s, game_pk)
             game_events = extract_home_runs(feed, game_pk)
             events.extend(game_events)
+            games_fetched += 1
+
+            if debug and game_events:
+                print(f"    ✓ Found {len(game_events)} HR(s)")
+
         except requests.exceptions.HTTPError as e:
-            print(f"Skipping game {game_pk} on {date_str}: {e}")
+            if debug:
+                print(f"    ✗ HTTP Error: {e}")
             continue
         except Exception as e:
-            print(f"Unexpected error for game {game_pk} on {date_str}: {e}")
+            if debug:
+                print(f"    ✗ Unexpected error: {e}")
             continue
 
-    print(f"{date_str}: found {len(events)} HR events")
+    if debug:
+        print(f"\nResults:")
+        print(f"  Games fetched: {games_fetched}/{len(games)}")
+        print(f"  Total HRs found: {len(events)}")
 
     leader = compute_leader(events, len(games))
 
@@ -291,9 +333,11 @@ def process_date(target_date: date):
             ),
         )
         conn.commit()
-        print(f"{date_str}: saved leader {leader.batter} ({leader.distance} ft)")
+        if debug:
+            print(f"\n✅ Saved leader: {leader.batter} ({leader.distance} ft)")
     else:
-        print(f"{date_str}: no HR leader found")
+        if debug:
+            print(f"\n⚠️  No HR leader found yet")
 
     return {
         "promo_active": True,
@@ -388,7 +432,7 @@ def get_history():
 
 @app.post("/api/refresh")
 def refresh():
-    result = process_date(promo_today())
+    result = process_date(promo_today(), debug=True)
     leader = result["leader"]
 
     return {
@@ -835,7 +879,7 @@ def run_worker():
     print("Starting worker...")
     while True:
         try:
-            process_date(promo_today())
+            process_date(promo_today(), debug=True)
             print("Updated", datetime.now())
         except Exception as e:
             print("Error:", e)
