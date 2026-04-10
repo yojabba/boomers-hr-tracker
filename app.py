@@ -22,7 +22,7 @@ MIN_GAMES_FOR_PROMO = 5
 USER_AGENT = "Mozilla/5.0 (BoomersBigFliesTracker/LiveOnly)"
 
 SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
-LIVE_FEED_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/feed/live"
+LIVE_FEED_URL = "https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live"
 
 PROMO_TZ = ZoneInfo("America/Los_Angeles")
 
@@ -137,15 +137,7 @@ def fetch_schedule(s, target_date: str):
 
 
 def fetch_live_feed(s, game_pk: int, game_link: str = None):
-    """Fetch live feed using the actual game link from MLB API."""
-    # Always use the actual game link if provided - it's more reliable
-    if game_link:
-        url = f"https://statsapi.mlb.com{game_link}/feed/live"
-        r = s.get(url, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        return r.json()
-    
-    # Fallback to constructing URL from game_pk (shouldn't normally reach here)
+    """Fetch live feed using game_pk with v1.1 API."""
     r = s.get(LIVE_FEED_URL.format(game_pk=game_pk), timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
@@ -312,7 +304,7 @@ def process_date(target_date: date, debug: bool = False):
                 print(f"  [{idx}/{len(games)}] Fetching... {game_teams} ({game_status})")
                 print(f"    PK: {game_pk}, Link: {game_link}")
 
-            feed = fetch_live_feed(s, game_pk, game_link)
+            feed = fetch_live_feed(s, game_pk)
             game_events = extract_home_runs(feed, game_pk, debug=debug)
             events.extend(game_events)
             games_fetched += 1
