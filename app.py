@@ -137,18 +137,15 @@ def fetch_schedule(s, target_date: str):
 
 
 def fetch_live_feed(s, game_pk: int, game_link: str = None):
-    """Fetch live feed using either game_pk or the actual game link from MLB API."""
-    # Try using the actual game link first if provided
+    """Fetch live feed using the actual game link from MLB API."""
+    # Always use the actual game link if provided - it's more reliable
     if game_link:
-        try:
-            url = f"https://statsapi.mlb.com{game_link}/feed/live"
-            r = s.get(url, timeout=REQUEST_TIMEOUT)
-            r.raise_for_status()
-            return r.json()
-        except Exception:
-            pass  # Fall back to game_pk method
+        url = f"https://statsapi.mlb.com{game_link}/feed/live"
+        r = s.get(url, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        return r.json()
     
-    # Fall back to constructing URL from game_pk
+    # Fallback to constructing URL from game_pk (shouldn't normally reach here)
     r = s.get(LIVE_FEED_URL.format(game_pk=game_pk), timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
