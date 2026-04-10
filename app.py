@@ -35,11 +35,20 @@ def promo_today() -> date:
     try:
         return datetime.now(PROMO_TZ).date()
     except Exception:
-        # Fallback: assume UTC and subtract 7-8 hours for LA
+        # Fallback: assume UTC and subtract 7 hours for PDT
         from datetime import timedelta
         utc_now = datetime.utcnow()
-        la_now = utc_now - timedelta(hours=7)  # PDT is UTC-7
+        la_now = utc_now - timedelta(hours=7)  # PDT is UTC-7 (summer time)
         return la_now.date()
+
+def get_current_time_la() -> datetime:
+    """Get current time in LA timezone for display."""
+    try:
+        return datetime.now(PROMO_TZ)
+    except Exception:
+        from datetime import timedelta
+        utc_now = datetime.utcnow()
+        return utc_now - timedelta(hours=7)
 
 
 # ===================== DATA CLASSES =====================
@@ -157,12 +166,15 @@ def is_game_active_or_final(game_state: str) -> bool:
     return True
 
 
-def extract_home_runs(feed, game_pk: int):
+def extract_home_runs(feed, game_pk: int, debug: bool = False):
     """
     Extract home runs from live feed with robust detection.
     """
     events = []
     plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
+
+    if debug:
+        print(f"    [Debug] Total plays in feed: {len(plays)}")
 
     away_team = feed.get("gameData", {}).get("teams", {}).get("away", {})
     home_team = feed.get("gameData", {}).get("teams", {}).get("home", {})
@@ -193,7 +205,8 @@ def extract_home_runs(feed, game_pk: int):
 
         # IMPORTANT: Some HRs might not have distance yet. Log them but still try to capture.
         if distance is None:
-            print(f"  [Game {game_pk}] HR found but no distance yet: {description}")
+            if debug:
+                print(f"      [HR found but no distance] {description}")
             continue
 
         matchup = play.get("matchup", {}) or {}
@@ -256,7 +269,7 @@ def process_date(target_date: date, debug: bool = False):
 
     date_str = target_date.isoformat()
     now_utc = datetime.utcnow().isoformat()
-    now_la = datetime.now(PROMO_TZ).isoformat()
+    now_la = get_current_time_la().isoformat()
     
     if debug:
         print(f"\n{'='*60}")
@@ -310,12 +323,15 @@ def process_date(target_date: date, debug: bool = False):
                 print(f"    PK: {game_pk}, Link: {game_link}")
 
             feed = fetch_live_feed(s, game_pk, game_link)
-            game_events = extract_home_runs(feed, game_pk)
+            game_events = extract_home_runs(feed, game_pk, debug=debug)
             events.extend(game_events)
             games_fetched += 1
 
-            if debug and game_events:
-                print(f"    ✓ Found {len(game_events)} HR(s)")
+            if debug:
+                if game_events:
+                    print(f"    ✓ Found {len(game_events)} HR(s)")
+                else:
+                    print(f"    • No HRs detected")
 
         except requests.exceptions.HTTPError as e:
             if debug:
