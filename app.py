@@ -1,15 +1,13 @@
-# Boomers Big Flies — FastAPI App + Scheduler (MLB Live Feed)
+# Boomers Big Flies — FastAPI App (Live-Only MLB Longest HR Tracker)
 
 """
-This file contains BOTH:
-1) A FastAPI web app to serve the current longest HR and history
-2) A scheduler loop (optional) you can run as a worker/cron to update data
+Live-only tracker for today's longest home run.
 
 How to use:
-- Web app (Render/Railway):
+- Web app:
     uvicorn app:app --host 0.0.0.0 --port 8000
 
-- Scheduler (local or cron worker):
+- Optional worker:
     python app.py --worker
 
 Env (optional):
@@ -18,9 +16,8 @@ Env (optional):
 Routes:
 - GET /             -> HTML dashboard
 - GET /api/today    -> JSON for today's leader
-- GET /api/history  -> JSON for all stored days
+- GET /api/history  -> JSON for stored days
 - POST /api/refresh -> Force refresh for today
-- POST /api/backfill -> Backfill history from Opening Day through today
 """
 
 import os
@@ -28,7 +25,7 @@ import sqlite3
 import time
 import argparse
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 from zoneinfo import ZoneInfo
@@ -44,23 +41,15 @@ GAME_TYPE = "R"  # Regular season
 POLL_SECONDS = 30
 REQUEST_TIMEOUT = 20
 MIN_GAMES_FOR_PROMO = 5
-USER_AGENT = "Mozilla/5.0 (BoomersBigFliesTracker/3.0)"
+USER_AGENT = "Mozilla/5.0 (BoomersBigFliesTracker/LiveOnly)"
 
 SCHEDULE_URL = "https://statsapi.mlb.com/api/v1/schedule"
 LIVE_FEED_URL = "https://statsapi.mlb.com/api/v1/game/{game_pk}/feed/live"
 
-# Opening Day for backfill
-OPENING_DAY = date(2026, 3, 26)
-
-# Promo / operator timezone
 PROMO_TZ = ZoneInfo("America/Los_Angeles")
 
-# DB: Use Postgres if DATABASE_URL provided, else SQLite
 DB_URL = os.getenv("DATABASE_URL")
 SQLITE_PATH = Path("longest_hr_tracker.sqlite3")
-
-# Avoid backfilling on every single request
-BACKFILL_RAN = False
 
 
 def promo_today() -> date:
@@ -166,15 +155,29 @@ def extract_home_runs(feed, game_pk: int):
     home_team = feed.get("gameData", {}).get("teams", {}).get("home", {})
 
     for play in plays:
-        if play.get("result", {}).get("eventType") != "home_run":
+        result = play.get("result", {}) or {}
+        event_type = (result.get("eventType") or "").lower()
+        event = (result.get("event") or "").lower()
+        description = (result.get("description") or "").lower()
+
+        is_home_run = (
+            event_type == "home_run"
+            or event == "home run"
+            or "homered" in description
+            or "home run" in description
+        )
+
+        if not is_home_run:
             continue
 
-        hit = play.get("hitData", {})
-        if not hit or not hit.get("totalDistance"):
+        hit = play.get("hitData", {}) or {}
+        distance = hit.get("totalDistance")
+
+        if distance is None:
             continue
 
-        matchup = play.get("matchup", {})
-        about = play.get("about", {})
+        matchup = play.get("matchup", {}) or {}
+        about = play.get("about", {}) or {}
 
         batting_team = away_team if about.get("isTopInning") else home_team
         team_name = batting_team.get("abbreviation") or batting_team.get("name") or ""
@@ -185,7 +188,7 @@ def extract_home_runs(feed, game_pk: int):
                 game_pk=game_pk,
                 batter=matchup.get("batter", {}).get("fullName"),
                 team=team_name,
-                distance=int(hit.get("totalDistance")),
+                distance=int(distance),
                 exit_velocity=hit.get("launchSpeed"),
                 launch_angle=hit.get("launchAngle"),
                 inning=about.get("inning"),
@@ -251,13 +254,16 @@ def process_date(target_date: date):
 
         try:
             feed = fetch_live_feed(s, game_pk)
-            events.extend(extract_home_runs(feed, game_pk))
+            game_events = extract_home_runs(feed, game_pk)
+            events.extend(game_events)
         except requests.exceptions.HTTPError as e:
             print(f"Skipping game {game_pk} on {date_str}: {e}")
             continue
         except Exception as e:
             print(f"Unexpected error for game {game_pk} on {date_str}: {e}")
             continue
+
+    print(f"{date_str}: found {len(events)} HR events")
 
     leader = compute_leader(events, len(games))
 
@@ -297,46 +303,13 @@ def process_date(target_date: date):
     }
 
 
-def backfill_history():
-    today = promo_today()
-    current = OPENING_DAY
-    results = []
-
-    while current < today:
-        try:
-            results.append(process_date(current))
-        except Exception as e:
-            print(f"Backfill failed for {current.isoformat()}: {e}")
-        current += timedelta(days=1)
-
-    return results
-
-
-def ensure_backfill_once():
-    global BACKFILL_RAN
-    if not BACKFILL_RAN:
-        print("Starting backfill from Opening Day...")
-        backfill_history()
-        BACKFILL_RAN = True
-        print("Backfill complete.")
-
-
 def update_data():
-    ensure_backfill_once()
     return process_date(promo_today())
 
 
 # ===================== FASTAPI =====================
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-
-@app.on_event("startup")
-def startup_backfill():
-    try:
-        ensure_backfill_once()
-    except Exception as e:
-        print(f"Startup backfill failed: {e}")
 
 
 @app.get("/api/today")
@@ -379,7 +352,6 @@ def get_today():
 
 @app.get("/api/history")
 def get_history():
-    ensure_backfill_once()
     conn = get_conn()
     init_db(conn)
     rows = conn.execute(
@@ -439,24 +411,6 @@ def refresh():
             "game_count": leader.game_count,
             "updated_at": leader.updated_at,
         } if leader else None
-    }
-
-
-@app.post("/api/backfill")
-def backfill():
-    results = backfill_history()
-    return {
-        "updated": True,
-        "days_processed": len(results),
-        "results": [
-            {
-                "date": r["date"],
-                "promo_active": r["promo_active"],
-                "game_count": r["game_count"],
-                "has_leader": r["leader"] is not None,
-            }
-            for r in results
-        ],
     }
 
 
@@ -755,8 +709,8 @@ def homepage():
 
             <div class="table-card">
                 <div class="table-head">
-                    <h2>Daily Leader History</h2>
-                    <span class="muted">Most recent dates first</span>
+                    <h2>Stored Leader History</h2>
+                    <span class="muted">Tracked from site launch forward</span>
                 </div>
                 <div class="table-wrap">
                     <table>
@@ -802,7 +756,7 @@ def homepage():
                 document.getElementById('promoStatus').textContent = json.promo_active ? 'Active' : 'Inactive';
                 document.getElementById('promoBadge').textContent = json.promo_active ? 'Promo Active (5+ games)' : 'Promo Inactive';
                 document.getElementById('lastChecked').textContent = json.last_checked
-                    ? `Last checked: ${new Date(json.last_checked).toLocaleTimeString()}`
+                    ? `Last checked: ${new Date(json.last_checked).toLocaleTimeString()} • Promo date: ${json.promo_date || '--'}`
                     : 'Checking for updates...';
 
                 if (!row) {
@@ -837,7 +791,7 @@ def homepage():
                 const tbody = document.getElementById('historyRows');
 
                 if (!rows.length) {
-                    tbody.innerHTML = '<tr><td colspan="7" class="muted">No history yet.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="7" class="muted">No stored history yet.</td></tr>';
                     return;
                 }
 
