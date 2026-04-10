@@ -31,7 +31,15 @@ SQLITE_PATH = Path("longest_hr_tracker.sqlite3")
 
 
 def promo_today() -> date:
-    return datetime.now(PROMO_TZ).date()
+    """Get today's date in LA timezone, with fallback."""
+    try:
+        return datetime.now(PROMO_TZ).date()
+    except Exception:
+        # Fallback: assume UTC and subtract 7-8 hours for LA
+        from datetime import timedelta
+        utc_now = datetime.utcnow()
+        la_now = utc_now - timedelta(hours=7)  # PDT is UTC-7
+        return la_now.date()
 
 
 # ===================== DATA CLASSES =====================
@@ -119,7 +127,19 @@ def fetch_schedule(s, target_date: str):
     return games
 
 
-def fetch_live_feed(s, game_pk: int):
+def fetch_live_feed(s, game_pk: int, game_link: str = None):
+    """Fetch live feed using either game_pk or the actual game link from MLB API."""
+    # Try using the actual game link first if provided
+    if game_link:
+        try:
+            url = f"https://statsapi.mlb.com{game_link}/feed/live"
+            r = s.get(url, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            pass  # Fall back to game_pk method
+    
+    # Fall back to constructing URL from game_pk
     r = s.get(LIVE_FEED_URL.format(game_pk=game_pk), timeout=REQUEST_TIMEOUT)
     r.raise_for_status()
     return r.json()
@@ -127,10 +147,14 @@ def fetch_live_feed(s, game_pk: int):
 
 def is_game_active_or_final(game_state: str) -> bool:
     """Check if game is in progress or already finished (so plays exist)."""
-    live_states = ["Live", "In Progress"]
-    final_states = ["Final", "Game Over", "Completed Early"]
     state_lower = (game_state or "").lower()
-    return any(s.lower() in state_lower for s in live_states + final_states)
+    
+    # Skip games that are definitely not started
+    if any(skip in state_lower for skip in ["scheduled", "pre-game", "warmup"]):
+        return False
+    
+    # Include any other status (Live, Final, In Progress, Completed Early, etc.)
+    return True
 
 
 def extract_home_runs(feed, game_pk: int):
@@ -285,7 +309,7 @@ def process_date(target_date: date, debug: bool = False):
                 print(f"  [{idx}/{len(games)}] Fetching... {game_teams} ({game_status})")
                 print(f"    PK: {game_pk}, Link: {game_link}")
 
-            feed = fetch_live_feed(s, game_pk)
+            feed = fetch_live_feed(s, game_pk, game_link)
             game_events = extract_home_runs(feed, game_pk)
             events.extend(game_events)
             games_fetched += 1
