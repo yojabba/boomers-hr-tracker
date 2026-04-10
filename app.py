@@ -155,14 +155,7 @@ def fetch_live_feed(s, game_pk: int, game_link: str = None):
 
 
 def is_game_active_or_final(game_state: str) -> bool:
-    """Check if game is in progress or already finished (so plays exist)."""
-    state_lower = (game_state or "").lower()
-    
-    # Skip games that are definitely not started
-    if any(skip in state_lower for skip in ["scheduled", "pre-game", "warmup"]):
-        return False
-    
-    # Include any other status (Live, Final, In Progress, Completed Early, etc.)
+    """Always return True - fetch data for all games."""
     return True
 
 
