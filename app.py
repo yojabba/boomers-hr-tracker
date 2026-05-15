@@ -496,6 +496,71 @@ def health():
     return {"status": "ok", "time_pacific": now_pacific().isoformat()}
 
 
+@app.get("/api/debug")
+def debug(team: Optional[str] = None):
+    """
+    Debug endpoint. Returns per-game scanner findings for today's slate.
+    Optional ?team=TBR (or any substring of team name/abbr) to filter.
+    """
+    s = session()
+    date_str = promo_today().isoformat()
+    try:
+        games = fetch_schedule(s, date_str)
+    except Exception as e:
+        return {"error": f"schedule fetch failed: {e}", "date": date_str}
+
+    out = []
+    for g in games:
+        game_pk = g.get("gamePk")
+        away = (g.get("teams", {}).get("away", {}).get("team", {}) or {})
+        home = (g.get("teams", {}).get("home", {}).get("team", {}) or {})
+        status = (g.get("status", {}) or {}).get("detailedState")
+        matchup_str = f"{away.get('name','?')} @ {home.get('name','?')}"
+
+        if team:
+            t = team.lower()
+            if (t not in (away.get("name","").lower())
+                and t not in (home.get("name","").lower())
+                and t not in (away.get("abbreviation","").lower())
+                and t not in (home.get("abbreviation","").lower())):
+                continue
+
+        info = {"game_pk": game_pk, "matchup": matchup_str, "status": status}
+        try:
+            feed = fetch_live_feed(s, game_pk)
+        except Exception as e:
+            info["error"] = f"feed fetch failed: {e}"
+            out.append(info)
+            continue
+
+        plays = feed.get("liveData", {}).get("plays", {}).get("allPlays", [])
+        info["total_plays"] = len(plays)
+
+        hr_plays = []
+        for play in plays:
+            result = play.get("result", {}) or {}
+            et = (result.get("eventType") or "").lower()
+            ev = (result.get("event") or "").lower()
+            desc = result.get("description") or ""
+            if et == "home_run" or ev == "home run" or "homer" in desc.lower() or "home run" in desc.lower():
+                hit = play.get("hitData", {}) or {}
+                matchup = play.get("matchup", {}) or {}
+                hr_plays.append({
+                    "batter": (matchup.get("batter") or {}).get("fullName"),
+                    "eventType": result.get("eventType"),
+                    "event": result.get("event"),
+                    "description": desc,
+                    "totalDistance": hit.get("totalDistance"),
+                    "launchSpeed": hit.get("launchSpeed"),
+                    "launchAngle": hit.get("launchAngle"),
+                    "has_hitData": bool(play.get("hitData")),
+                })
+        info["home_run_candidates"] = hr_plays
+        out.append(info)
+
+    return {"date": date_str, "games_scanned": len(out), "games": out}
+
+
 @app.get("/", response_class=HTMLResponse)
 def homepage():
     return HOMEPAGE_HTML
